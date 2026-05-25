@@ -6,6 +6,8 @@ PrusaSlicer to print. Save your designs to a local library and come back to them
 
 For people who already reach for a **Prusa printer** and **Claude** as go-to tools.
 
+![Describe on the left, a live 3D model in the center, real PrusaSlicer estimates and geometry checks on the right](docs/screenshot.png)
+
 ## Prerequisites (one-time)
 
 - **Python 3.10+**
