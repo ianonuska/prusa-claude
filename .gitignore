@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Bundled BOSL2 library — fetched by run.sh on first launch (separate license)
+libs/
+
+# Runtime + generated artifacts
+app/work/
+app/designs/
+spike/out/
+spike/build/
+*.gcode
+
+# Local / scratch
+eval/
+.env
+.env.*
+*.local.ini

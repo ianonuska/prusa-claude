@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prusa plugin — describe → see → slice</title>
+<style>
+  :root {
+    --bg:#fbf3e8;          /* warm beige page */
+    --panel:#ffffff;        /* white panels */
+    --line:#ecdfc9;         /* tan hairline */
+    --line2:#e0cfb2;
+    --text:#3a302612;       /* (unused) */
+    --ink:#3b322a;          /* warm dark brown text */
+    --muted:#9a8b76;        /* tan-grey */
+    --accent:#f26a21;       /* Prusa orange */
+    --accent-d:#d2541a;     /* deeper orange */
+    --accent-soft:#fdece0;  /* pale orange wash */
+    --err:#c0432f;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--ink);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  #app { display:grid; grid-template-columns:360px 1fr 290px; grid-template-rows:minmax(0,1fr); height:100vh; }
+  .col { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--bg); }
+  .col + .col { border-left:1px solid var(--line2); }
+  header { padding:11px 15px; border-bottom:1px solid var(--line2); display:flex;
+    align-items:center; gap:8px; flex:0 0 auto; background:var(--panel); }
+  header b { font-weight:700; letter-spacing:.2px; }
+  header .cfg { margin-left:auto; color:var(--muted); font-size:11px; }
+
+  /* chat */
+  #log { flex:1 1 auto; min-height:0; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:11px; }
+  .msg { padding:9px 11px; border-radius:10px; white-space:pre-wrap; word-break:break-word; }
+  .msg.user { background:var(--accent); color:#fff; align-self:flex-end; max-width:88%; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+  .msg.bot  { background:var(--panel); border:1px solid var(--line); align-self:flex-start; max-width:92%; }
+  .msg.sys  { color:var(--muted); font-size:12px; align-self:center; text-align:center; }
+  .msg.meta { color:var(--muted); font-size:12px; align-self:flex-start; }
+  .msg.err  { color:var(--err); font-size:12.5px; background:#fbe7e2; border:1px solid #f1c9c0;
+    align-self:flex-start; }
+
+  /* guidance chips */
+  .guide { align-self:stretch; display:flex; flex-direction:column; gap:9px; }
+  .qgroup { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px 10px; }
+  .qprompt { font-size:12.5px; font-weight:600; color:var(--ink); margin-bottom:7px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:var(--accent-soft); color:var(--accent-d); border:1px solid #f6cdb0;
+    border-radius:999px; padding:5px 11px; font-size:12.5px; cursor:pointer; font-weight:600;
+    transition:all .12s; }
+  .chip:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .sugtitle { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted);
+    margin:2px 2px 0; }
+
+  #composer { flex:0 0 auto; border-top:1px solid var(--line2); padding:11px; background:var(--panel); }
+  #composer textarea { width:100%; resize:none; height:62px; background:#fffdf9; color:var(--ink);
+    border:1px solid var(--line2); border-radius:9px; padding:9px; font:inherit; }
+  #composer textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .row { display:flex; align-items:center; gap:9px; margin-top:9px; }
+  button { background:var(--accent); color:#fff; border:none; border-radius:8px;
+    padding:8px 14px; font:inherit; font-weight:650; cursor:pointer; transition:background .12s; }
+  button:hover { background:var(--accent-d); }
+  button.ghost { background:#fff; color:var(--muted); border:1px solid var(--line2); font-weight:500; }
+  button.ghost:hover { background:#fff; color:var(--ink); border-color:var(--muted); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  label.chk { color:var(--muted); font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer; }
+
+  /* viewer */
+  #viewer { flex:1 1 auto; position:relative;
+    background:radial-gradient(circle at 50% 28%, #fffaf2, #f0e1c9); }
+  #viewer canvas { display:block; }
+  #vhint { position:absolute; left:13px; bottom:11px; color:var(--muted); font-size:11px; pointer-events:none; }
+  #spinner { position:absolute; inset:0; display:none; flex-direction:column; align-items:center;
+    justify-content:center; gap:11px; color:var(--accent-d); font-size:13px; font-weight:600;
+    background:rgba(253,247,238,.55); }
+  #spinner .bar { width:200px; height:6px; background:#f0e1c9; border-radius:4px; overflow:hidden; }
+  #spinner .bar > i { display:block; height:100%; width:40%; background:var(--accent); border-radius:4px;
+    animation:slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0%{margin-left:-42%} 100%{margin-left:102%} }
+
+  /* right panel */
+  .sect { padding:13px 15px; border-bottom:1px solid var(--line); }
+  .sect h3 { margin:0 0 9px; font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); font-weight:700; }
+  .stat { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
+  .stat span:last-child { color:var(--accent-d); font-variant-numeric:tabular-nums; font-weight:600; }
+  .actions { display:flex; flex-direction:column; gap:9px; }
+  .actions a { text-decoration:none; }
+  .big { font-size:16px; font-weight:750; color:var(--ink); }
+  pre#code { display:none; white-space:pre-wrap; font:12px/1.4 ui-monospace,Menlo,monospace;
+    background:#fffdf9; border:1px solid var(--line2); border-radius:9px; padding:10px; max-height:42vh; overflow:auto; color:#4a3f33; }
+  .warn { background:#fff3e6; border:1px solid #f3c89a; color:#9a5a18; border-radius:8px;
+    padding:8px 10px; font-size:12.5px; margin-bottom:6px; }
+  .profrow { margin-top:10px; font-size:11.5px; color:var(--muted); }
+  .profrow b { color:var(--ink); font-weight:600; }
+  .link { background:none; border:none; color:var(--accent-d); padding:0 0 0 4px; font:inherit;
+    font-size:11.5px; font-weight:600; cursor:pointer; text-decoration:underline; }
+  .link:hover { background:none; color:var(--accent); }
+  .param { margin-bottom:10px; }
+  .param label { display:flex; justify-content:space-between; font-size:12px; color:var(--ink); margin-bottom:3px; }
+  .param .pval { color:var(--accent-d); font-weight:700; font-variant-numeric:tabular-nums; }
+  .param input[type=range] { width:100%; accent-color:var(--accent); cursor:pointer; }
+  .param select { width:100%; padding:5px 6px; border:1px solid var(--line2); border-radius:7px;
+    background:#fffdf9; font:inherit; color:var(--ink); }
+  .headbtn { background:var(--panel); border:1px solid var(--line2); color:var(--ink); border-radius:7px;
+    padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer; margin-left:12px; }
+  .headbtn:hover { border-color:var(--accent); color:var(--accent-d); }
+  .modal { position:fixed; inset:0; background:rgba(40,30,20,.45); display:none; z-index:50;
+    align-items:flex-start; justify-content:center; padding:5vh 4vw; }
+  .modal.open { display:flex; }
+  .modalcard { background:var(--bg); border:1px solid var(--line2); border-radius:14px; width:100%;
+    max-width:900px; max-height:86vh; overflow:auto; box-shadow:0 12px 44px rgba(0,0,0,.28); }
+  .modalhead { display:flex; align-items:center; padding:13px 18px; border-bottom:1px solid var(--line2);
+    position:sticky; top:0; background:var(--panel); }
+  .modalhead b { font-size:15px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; padding:18px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:11px; overflow:hidden;
+    cursor:pointer; transition:border-color .12s, transform .08s; position:relative; }
+  .card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .card img { width:100%; height:135px; object-fit:contain; background:#fbf3e8; display:block; }
+  .card .cname { font-size:13px; font-weight:650; padding:8px 10px 2px; }
+  .card .cmeta { font-size:11px; color:var(--muted); padding:0 10px 9px; }
+  .card .del { position:absolute; top:6px; right:6px; background:rgba(255,255,255,.92);
+    border:1px solid var(--line2); border-radius:6px; width:23px; height:23px; line-height:20px;
+    text-align:center; color:var(--err); font-weight:700; }
+  .empty { padding:48px; text-align:center; color:var(--muted); }
+  .rscroll { flex:1 1 auto; min-height:0; overflow-y:auto; }
+  .chip.sel { background:var(--accent); color:#fff; border-color:var(--accent-d);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.45); }
+  #partsBar { flex:0 0 auto; display:none; gap:6px; align-items:center; padding:7px 12px;
+    border-bottom:1px solid var(--line2); background:var(--panel); overflow-x:auto; white-space:nowrap; }
+  #partsBar.show { display:flex; }
+  #partsBar .plabel { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+    font-weight:700; margin-right:4px; flex:0 0 auto; }
+  .ptab { background:var(--accent-soft); color:var(--accent-d); border:1px solid #f6cdb0; border-radius:7px;
+    padding:4px 12px; font-size:12.5px; font-weight:600; cursor:pointer; flex:0 0 auto; }
+  .ptab:hover { border-color:var(--accent); }
+  .ptab.active { background:var(--accent); color:#fff; border-color:var(--accent-d); }
+  #tuneBar { flex:0 0 auto; display:none; gap:16px; align-items:center; padding:10px 14px;
+    border-top:1px solid var(--line2); background:var(--panel); overflow-x:auto; white-space:nowrap; }
+  #tuneBar.show { display:flex; }
+  #tuneBar .tlabel { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted);
+    font-weight:700; align-self:center; flex:0 0 auto; }
+  #tuneBar .tparam { flex:0 0 auto; min-width:144px; }
+  #tuneBar .tparam label { display:flex; justify-content:space-between; gap:10px; font-size:11.5px;
+    color:var(--ink); margin-bottom:3px; }
+  #tuneBar .tparam .pval { color:var(--accent-d); font-weight:700; font-variant-numeric:tabular-nums; }
+  #tuneBar input[type=range] { width:144px; accent-color:var(--accent); cursor:pointer; vertical-align:middle; }
+  #tuneBar select { font:inherit; padding:4px 6px; border:1px solid var(--line2); border-radius:7px;
+    background:#fffdf9; color:var(--ink); }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- chat -->
+  <div class="col">
+    <header><b>describe</b><button class="headbtn" id="libBtn">★ library</button><span class="cfg" id="cfg"></span></header>
+    <div id="log">
+      <div class="msg sys">Describe a part to print — e.g. “a phone stand for an iPhone 15 Pro”.<br>I’ll build it, then offer a few choices to dial it in.</div>
+    </div>
+    <div id="composer">
+      <textarea id="text" placeholder="Describe or refine the part…"></textarea>
+      <div class="row">
+        <button id="send">Generate</button>
+        <label class="chk"><input type="checkbox" id="careful"> careful</label>
+        <label class="chk"><input type="checkbox" id="bosl2"> BOSL2</label>
+        <button class="ghost" id="reset" style="margin-left:auto">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- viewer -->
+  <div class="col">
+    <header><b>model</b></header>
+    <div id="partsBar"></div>
+    <div id="viewer">
+      <div id="spinner"><div class="bar"><i></i></div><div id="spinTxt">generating…</div></div>
+      <div id="vhint">drag to rotate · scroll to zoom</div>
+    </div>
+    <div id="tuneBar"></div>
+  </div>
+
+  <!-- results -->
+  <div class="col">
+    <header><b>result</b></header>
+    <div class="rscroll">
+      <div class="sect">
+        <h3>slice estimate</h3>
+        <div id="stats"><div class="stat"><span>—</span><span>—</span></div></div>
+        <div class="profrow">profile: <b id="profName">—</b>
+          <button class="link" id="upProfile">use my config.ini</button>
+          <input type="file" id="profFile" accept=".ini" style="display:none"></div>
+      </div>
+      <div class="sect" id="checkSect" style="display:none">
+        <h3>geometry checks</h3>
+        <div id="checks"></div>
+      </div>
+      <div class="sect" id="warnSect" style="display:none">
+        <h3>print warnings</h3>
+        <div id="warns"></div>
+      </div>
+      <div class="sect actions">
+        <h3>do something with it</h3>
+        <button id="openSlicer" disabled>Open in PrusaSlicer</button>
+        <a id="dl" href="#"><button id="dlBtn" disabled style="width:100%">Download STL</button></a>
+        <button id="saveBtn" disabled>★ Save to library</button>
+        <button class="ghost" id="viewCode" disabled>View OpenSCAD</button>
+      </div>
+      <div class="sect"><pre id="code"></pre></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="libModal">
+  <div class="modalcard">
+    <div class="modalhead"><b>my designs</b><button class="headbtn" id="libClose" style="margin-left:auto">close</button></div>
+    <div class="grid" id="libGrid"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script>
+// ---------- 3D viewer ----------
+let renderer, scene, camera, controls, mesh, grid;
+function initViewer() {
+  const el = document.getElementById('viewer');
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  el.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(45, el.clientWidth/el.clientHeight, 0.1, 5000);
+  camera.position.set(80, 80, 120);
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const d1 = new THREE.DirectionalLight(0xffffff, 0.85); d1.position.set(1,2,1.2); scene.add(d1);
+  const d2 = new THREE.DirectionalLight(0xfff0e0, 0.35); d2.position.set(-1,0.7,-1); scene.add(d2);
+
+  grid = new THREE.GridHelper(200, 20, 0xd8b98a, 0xe6d4b5);
+  scene.add(grid);
+
+  window.addEventListener('resize', resizeViewer);
+  (function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+}
+
+function resizeViewer() {
+  if (!renderer || !camera) return;
+  const el = document.getElementById('viewer');
+  camera.aspect = el.clientWidth / el.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(el.clientWidth, el.clientHeight);
+}
+
+function loadModel(url) {
+  new THREE.STLLoader().load(url, (geo) => {
+    if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({ color:0xee6c2b, metalness:0.05, roughness:0.6 });
+    mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI/2;                 // OpenSCAD Z-up -> viewer Y-up
+    scene.add(mesh);
+
+    const box = new THREE.Box3().setFromObject(mesh);
+    const size = new THREE.Vector3(), center = new THREE.Vector3();
+    box.getSize(size); box.getCenter(center);
+    mesh.position.set(-center.x, -box.min.y, -center.z);
+
+    const maxDim = Math.max(size.x, size.y, size.z) || 50;
+    grid.scale.setScalar(Math.max(1, maxDim/100));
+    camera.position.set(maxDim*1.1, maxDim*1.0, maxDim*1.6);
+    controls.target.set(0, size.y/2, 0);
+    controls.update();
+  });
+}
+
+// ---------- chat / api ----------
+const log = document.getElementById('log');
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function add(cls, html) { const d=document.createElement('div'); d.className='msg '+cls; d.innerHTML=html; log.appendChild(d); log.scrollTop=log.scrollHeight; return d; }
+
+function renderStats(s) {
+  const box = document.getElementById('stats');
+  if (!s || !s.ok) { box.innerHTML = '<div class="stat"><span>slice</span><span>n/a</span></div>'; return; }
+  const fil = (s.filament_g && s.filament_g!=='0.00') ? s.filament_g+' g' : (s.filament_cm3+' cm³');
+  const rows = [
+    ['print time', s.print_time || '—', true],
+    ['filament', fil],
+  ];
+  if (s.filament_cost && s.filament_cost !== '0.00') rows.push(['cost', '$'+s.filament_cost]);
+  rows.push(
+    ['layer height', (s.layer_height||'—')+' mm'],
+    ['infill', s.fill_density||'—'],
+    ['perimeters', s.perimeters||'—'],
+    ['supports', s.supports||'—'],
+  );
+  box.innerHTML = rows.map(([k,v,big]) =>
+    `<div class="stat"><span>${k}</span><span class="${big?'big':''}">${v}</span></div>`).join('');
+  if (s.profile) document.getElementById('profName').textContent = s.profile;
+}
+
+function renderWarnings(list) {
+  const sect = document.getElementById('warnSect'), box = document.getElementById('warns');
+  if (!list || !list.length) { sect.style.display = 'none'; box.innerHTML = ''; return; }
+  sect.style.display = 'block';
+  box.innerHTML = list.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join('');
+}
+
+let partState = null;
+function renderParts(parts) {
+  const bar = document.getElementById('partsBar');
+  partState = parts;
+  document.getElementById('dlBtn').textContent = 'Download STL';
+  if (!parts || !parts.options || parts.options.length < 2) {
+    bar.classList.remove('show'); bar.innerHTML = ''; requestAnimationFrame(resizeViewer); return;
+  }
+  bar.classList.add('show'); bar.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.className = 'plabel'; lbl.textContent = 'parts'; bar.appendChild(lbl);
+  parts.options.forEach(o => {
+    const b = document.createElement('button');
+    b.className = 'ptab' + (o.value === parts.current ? ' active' : '');
+    b.textContent = o.value; b.onclick = () => setPart(o.value);
+    bar.appendChild(b);
+  });
+  const cur = parts.options.find(o => o.value === parts.current);
+  if (cur && !cur.is_combined) document.getElementById('dlBtn').textContent = 'Download STL (' + parts.current + ')';
+  requestAnimationFrame(resizeViewer);
+}
+
+async function setPart(value) {
+  if (busy || tuning || !partState) return;
+  tuning = true; startSpinner('rendering ' + value + '…');
+  try {
+    const r = await fetch('/api/set-params', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ values: { [partState.name]: value } }) });
+    const d = await r.json();
+    if (d.ok) {
+      partState.current = value;
+      document.querySelectorAll('#partsBar .ptab').forEach(t => t.classList.toggle('active', t.textContent === value));
+      loadModel(d.stl_url); renderStats(d.stats); renderChecks(d.analysis);
+      renderWarnings([].concat((d.analysis && d.analysis.warnings) || [], (d.stats && d.stats.slicer_warnings) || []));
+      document.getElementById('dl').href = d.stl_url;
+      const o = partState.options.find(x => x.value === value);
+      document.getElementById('dlBtn').textContent = (o && !o.is_combined) ? ('Download STL (' + value + ')') : 'Download STL';
+    } else { add('err', 'part render failed: ' + esc((d.error || '').slice(0,200))); }
+  } catch (e) { add('err', 'part switch failed: ' + esc(e)); }
+  finally { stopSpinner(); tuning = false; }
+}
+
+function renderParams(list) {
+  const bar = document.getElementById('tuneBar');
+  if (partState) list = (list || []).filter(p => p.name !== partState.name);  // selector lives in the parts strip
+  if (!list || !list.length) { bar.classList.remove('show'); bar.innerHTML = ''; requestAnimationFrame(resizeViewer); return; }
+  bar.classList.add('show'); bar.innerHTML = '';
+  const lbl = document.createElement('span'); lbl.className = 'tlabel'; lbl.textContent = 'tune'; bar.appendChild(lbl);
+  list.forEach(p => {
+    const row = document.createElement('div'); row.className = 'tparam';
+    if (p.type === 'number') {
+      row.innerHTML = `<label>${esc(p.name)} <span class="pval">${p.value}</span></label>
+        <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.value}" data-name="${esc(p.name)}">`;
+      const inp = row.querySelector('input'), val = row.querySelector('.pval');
+      inp.addEventListener('input', () => val.textContent = inp.value);  // live label while dragging
+      inp.addEventListener('change', applyParams);                       // re-render on release
+    } else {
+      row.innerHTML = `<label>${esc(p.name)}</label>
+        <select data-name="${esc(p.name)}">${p.options.map(o => `<option ${o===p.value?'selected':''}>${esc(o)}</option>`).join('')}</select>`;
+      row.querySelector('select').addEventListener('change', applyParams);
+    }
+    bar.appendChild(row);
+  });
+  requestAnimationFrame(resizeViewer);
+}
+
+function collectParams() {
+  const vals = {};
+  document.querySelectorAll('#tuneBar [data-name]').forEach(el => {
+    vals[el.dataset.name] = el.type === 'range' ? parseFloat(el.value) : el.value;
+  });
+  return vals;
+}
+
+let tuning = false;
+async function applyParams() {
+  if (tuning || busy) return;
+  tuning = true;
+  startSpinner('re-rendering…');
+  try {
+    const r = await fetch('/api/set-params', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ values: collectParams() }) });
+    const d = await r.json();
+    if (d.ok) {
+      loadModel(d.stl_url); renderStats(d.stats); renderChecks(d.analysis);
+      renderWarnings([].concat((d.analysis && d.analysis.warnings) || [],
+                               (d.stats && d.stats.slicer_warnings) || []));
+      document.getElementById('dl').href = d.stl_url;
+    } else { add('err', 're-render failed: ' + esc((d.error || '').slice(0,200))); }
+  } catch (e) { add('err', 'tune failed: ' + esc(e)); }
+  finally { stopSpinner(); tuning = false; }
+}
+
+function renderChecks(a) {
+  const sect = document.getElementById('checkSect'), box = document.getElementById('checks');
+  if (!a || !a.ok) { sect.style.display = 'none'; return; }
+  sect.style.display = 'block';
+  const yn = b => b ? '<span style="color:#3a8a4a;font-weight:700">✓</span>'
+                    : '<span style="color:#c0432f;font-weight:700">✗</span>';
+  const rows = [
+    ['manifold', yn(a.watertight)],
+    ['fits bed', yn(a.fits_bed)],
+    ['size', a.bbox ? a.bbox.map(v => Math.round(v)).join('×') + ' mm' : '—'],
+  ];
+  if (a.volume_cm3 != null) rows.push(['solid volume', a.volume_cm3 + ' cm³']);
+  box.innerHTML = rows.map(([k, v]) => `<div class="stat"><span>${k}</span><span>${v}</span></div>`).join('');
+}
+
+// pending chip selections — accumulate, then send together on Generate
+const pendingSends = new Set();
+function updateGenBtn() {
+  const n = pendingSends.size;
+  document.getElementById('send').textContent = n ? `Generate (${n})` : 'Generate';
+}
+function clearPending() {
+  pendingSends.clear();
+  document.querySelectorAll('.chip.sel').forEach(c => c.classList.remove('sel'));
+  updateGenBtn();
+}
+function pickQuestion(chip) {                 // radio within a question group
+  const grp = chip.dataset.group;
+  chip.closest('.guide').querySelectorAll('.chip[data-group]').forEach(c => {
+    if (c !== chip && c.dataset.group === grp && c.classList.contains('sel')) {
+      c.classList.remove('sel'); pendingSends.delete(c.dataset.send);
+    }
+  });
+  if (chip.classList.toggle('sel')) pendingSends.add(chip.dataset.send);
+  else pendingSends.delete(chip.dataset.send);
+  updateGenBtn();
+}
+function pickSuggestion(chip) {               // independent toggle
+  if (chip.classList.toggle('sel')) pendingSends.add(chip.dataset.send);
+  else pendingSends.delete(chip.dataset.send);
+  updateGenBtn();
+}
+
+function renderGuide(questions, suggestions) {
+  if ((!questions || !questions.length) && (!suggestions || !suggestions.length)) return;
+  const wrap = document.createElement('div'); wrap.className = 'guide';
+  (questions||[]).forEach(q => {
+    const g = document.createElement('div'); g.className='qgroup';
+    const p = document.createElement('div'); p.className='qprompt'; p.textContent = q.prompt; g.appendChild(p);
+    const chips = document.createElement('div'); chips.className='chips';
+    (q.options||[]).forEach(opt => {
+      const b = document.createElement('button'); b.className='chip'; b.textContent = opt;
+      b.dataset.send = `${q.prompt} ${opt}`; b.dataset.group = q.prompt;
+      b.onclick = () => pickQuestion(b);
+      chips.appendChild(b);
+    });
+    g.appendChild(chips); wrap.appendChild(g);
+  });
+  if (suggestions && suggestions.length) {
+    const t = document.createElement('div'); t.className='sugtitle'; t.textContent='try next'; wrap.appendChild(t);
+    const chips = document.createElement('div'); chips.className='chips';
+    suggestions.forEach(s => {
+      const b = document.createElement('button'); b.className='chip'; b.textContent = s;
+      b.dataset.send = s;
+      b.onclick = () => pickSuggestion(b);
+      chips.appendChild(b);
+    });
+    wrap.appendChild(chips);
+  }
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+}
+
+let spinTimer = null;
+function startSpinner(label) {
+  const t0 = Date.now(), txt = document.getElementById('spinTxt');
+  const tick = () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    txt.textContent = `${label} ${s}s` + (s >= 20 ? ' · still working — complex/careful parts take a bit' : '');
+  };
+  tick(); clearInterval(spinTimer); spinTimer = setInterval(tick, 500);
+  document.getElementById('spinner').style.display = 'flex';
+}
+function stopSpinner() {
+  clearInterval(spinTimer); spinTimer = null;
+  document.getElementById('spinner').style.display = 'none';
+}
+
+let busy = false;
+async function send(forced) {
+  const ta = document.getElementById('text');
+  let parts;
+  if (forced !== undefined) parts = [forced];
+  else {
+    parts = Array.from(pendingSends);          // selected chips...
+    const typed = ta.value.trim();
+    if (typed) parts.push(typed);              // ...plus anything typed
+  }
+  const txt = parts.join('. ').trim();
+  if (!txt || busy) return;
+  busy = true; document.getElementById('send').disabled = true;
+  add('user', esc(txt));
+  if (forced === undefined) { ta.value = ''; clearPending(); }
+  startSpinner('generating…');
+
+  try {
+    const r = await fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text: txt, careful: document.getElementById('careful').checked,
+                             bosl2: document.getElementById('bosl2').checked }) });
+    const d = await r.json();
+    if (d.ok) {
+      if (d.references_used && d.references_used.length)
+        add('meta', '📐 used known dimensions: ' + d.references_used.map(esc).join(', '));
+      if (d.summary) add('bot', esc(d.summary));
+      add('meta', `✓ ${d.latency_s}s · $${d.turn_cost} this turn · $${d.session_cost} session`
+        + (d.warnings && d.warnings.length ? `<br>⚠ ${d.warnings.map(esc).join('<br>⚠ ')}` : ''));
+      loadModel(d.stl_url);
+      renderParts(d.parts);
+      renderParams(d.params);
+      renderStats(d.stats);
+      renderChecks(d.analysis);
+      renderWarnings([].concat((d.analysis && d.analysis.warnings) || [],
+                               (d.stats && d.stats.slicer_warnings) || []));
+      renderGuide(d.questions, d.suggestions);
+      ['openSlicer','dlBtn','viewCode','saveBtn'].forEach(id => document.getElementById(id).disabled = false);
+      document.getElementById('dl').href = d.stl_url;
+      document.getElementById('code').style.display = 'none';
+    } else {
+      add('err', 'could not build that: ' + esc((d.error||'').slice(0,400)));
+    }
+  } catch (e) {
+    add('err', 'request failed: ' + esc(e));
+  } finally {
+    stopSpinner();
+    busy = false; document.getElementById('send').disabled = false;
+  }
+}
+
+document.getElementById('send').onclick = () => send();
+document.getElementById('text').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+document.getElementById('openSlicer').onclick = async () => {
+  const r = await fetch('/api/open-slicer', { method:'POST' }); const d = await r.json();
+  add('meta', d.ok ? 'opening in PrusaSlicer…' : ('could not open slicer: ' + esc(d.error||'')));
+};
+document.getElementById('viewCode').onclick = async () => {
+  const pre = document.getElementById('code');
+  if (pre.style.display === 'block') { pre.style.display='none'; return; }
+  const r = await fetch('/api/scad'); pre.textContent = await r.text(); pre.style.display='block';
+};
+document.getElementById('reset').onclick = async () => {
+  await fetch('/api/reset', { method:'POST' });
+  log.innerHTML=''; add('sys','reset. describe a new part.'); clearPending();
+  renderStats(null); renderChecks(null); renderWarnings([]); renderParts(null); renderParams(null);
+  ['openSlicer','dlBtn','viewCode','saveBtn'].forEach(id => document.getElementById(id).disabled = true);
+  if (mesh) { scene.remove(mesh); mesh = null; }
+};
+
+// profile upload: read an exported config.ini and send its text
+document.getElementById('upProfile').onclick = () => document.getElementById('profFile').click();
+document.getElementById('profFile').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const content = await f.text();
+  const r = await fetch('/api/set-profile', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name: f.name, content }) });
+  const d = await r.json();
+  if (d.ok) { document.getElementById('profName').textContent = d.profile;
+    add('meta', `profile set to ${esc(d.profile)} — applies on the next generation`); }
+};
+
+// ---------- library ----------
+function openLibrary() {
+  fetch('/api/designs').then(r => r.json()).then(d => {
+    const g = document.getElementById('libGrid');
+    if (!d.designs.length) {
+      g.innerHTML = '<div class="empty">No saved designs yet.<br>Generate something, then hit “★ Save to library”.</div>';
+    } else {
+      g.innerHTML = d.designs.map(c => `
+        <div class="card" data-id="${esc(c.id)}">
+          <span class="del" data-del="${esc(c.id)}" title="delete">×</span>
+          <img src="/api/thumb/${esc(c.id)}" onerror="this.style.display='none'">
+          <div class="cname">${esc(c.name)}</div>
+          <div class="cmeta">${c.print_time ? esc(c.print_time) + ' · ' : ''}${esc(c.created_at || '')}</div>
+        </div>`).join('');
+      g.querySelectorAll('.card').forEach(el => el.onclick = (e) => {
+        if (e.target.dataset.del) return;
+        loadDesign(el.dataset.id);
+      });
+      g.querySelectorAll('.del').forEach(el => el.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this design?')) return;
+        await fetch('/api/delete', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: el.dataset.del }) });
+        openLibrary();
+      });
+    }
+    document.getElementById('libModal').classList.add('open');
+  });
+}
+
+async function loadDesign(id) {
+  const r = await fetch('/api/load', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ id }) });
+  const d = await r.json();
+  if (!d.ok) { add('err', 'could not load that design'); return; }
+  document.getElementById('libModal').classList.remove('open');
+  add('sys', 'loaded “' + esc(d.name) + '” — keep refining or tune it');
+  if (d.summary) add('bot', esc(d.summary));
+  loadModel(d.stl_url); renderParts(d.parts); renderParams(d.params); renderStats(d.stats); renderChecks(d.analysis);
+  renderWarnings([].concat((d.analysis && d.analysis.warnings) || [],
+                           (d.stats && d.stats.slicer_warnings) || []));
+  ['openSlicer','dlBtn','viewCode','saveBtn'].forEach(i => document.getElementById(i).disabled = false);
+  document.getElementById('dl').href = d.stl_url;
+}
+
+document.getElementById('libBtn').onclick = openLibrary;
+document.getElementById('libClose').onclick = () => document.getElementById('libModal').classList.remove('open');
+document.getElementById('libModal').onclick = (e) => {
+  if (e.target.id === 'libModal') e.currentTarget.classList.remove('open');
+};
+document.getElementById('saveBtn').onclick = async () => {
+  const name = prompt('Name this design:');
+  if (!name) return;
+  const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name }) });
+  const d = await r.json();
+  add('meta', d.ok ? ('saved “' + esc(d.design.name) + '” to your library')
+                   : ('save failed: ' + esc(d.error || '')));
+};
+
+initViewer();
+fetch('/api/config').then(r=>r.json()).then(c => {
+  const warn = [];
+  if (!c.openscad_found) warn.push('⚠ OpenSCAD missing');
+  if (!c.prusa_found) warn.push('⚠ PrusaSlicer missing');
+  if (!c.api_key_set) warn.push('⚠ API key not set');
+  document.getElementById('cfg').textContent = c.model + (warn.length ? ' · ' + warn.join(' · ') : '');
+  document.getElementById('profName').textContent = c.profile;
+});
+</script>
+</body>
+</html>
